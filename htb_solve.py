@@ -10,13 +10,13 @@ from py_ecc.optimized_bls12_381.optimized_curve import add, G1, multiply, neg, n
 
 from sage.all import EllipticCurve, GF, identity_matrix, PolynomialRing, Sequence, zero_matrix, ZZ
 
-context.log_level = 'info'   # 'debug' kalau mau lebih verbose
-context.timeout   = 10       # cegah hang lama saat recvuntil
+context.log_level = 'info'
+context.timeout   = 10       
 
-# --- IO utils ---
+#IO utils
 def get_process():
     if len(sys.argv) == 1:
-        #ganti path server lokal jika beda
+        #ganti path server lokal nek beda (opsional)
         return process(['python3', 'crypto_blessed/challenge.py'], level='DEBUG')
     host, port = sys.argv[1].split(':')
     return remote(host, int(port))
@@ -38,12 +38,12 @@ def recv_prompt_and_send_C(io, C_pk_branch, C_g1_branch):
     elif b'x * G1' in buf:
         C = C_g1_branch
     else:
-        #fallback: pk-branch (umum pada source asli)
+        #fallback
         C = C_pk_branch
     io.sendline(bytes(G1_to_pubkey(C)).hex().encode())
     return buf
 
-# --- EC / LCG crack ---
+#EC / LCG crack
 p = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
 K = GF(p)
 a = K(0xffffffff00000001000000000000000000000000fffffffffffffffffffffffc)
@@ -54,7 +54,7 @@ Gp = E(0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296,
 E.set_order(0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551 * 0x1)
 
 def crack_ec_lcg(values):
-    #values: [u1,v1,u2,v2,u3,v3] dari 6 robot_id << 32
+    #[u1,v1,u2,v2,u3,v3] dari 6 robot_id << 32
     assert len(values) == 6
     u1, v1, u2, v2, u3, v3 = values
     a1, b1, a2, b2, a3, b3 = PolynomialRing(K, 'a1, b1, a2, b2, a3, b3').gens()
@@ -83,7 +83,7 @@ def crack_ec_lcg(values):
     W3 = E(u3 + a3, v3 + b3)
     return W3
 
-# --- exploit flow ---
+#exploit flow
 def main():
     io = get_process()
 
@@ -92,7 +92,7 @@ def main():
     sk  = int(res['sk'], 16)
     rid = int(res['robot_id'], 16)
 
-    #list (butuh signature dari robot verified)
+    #(butuh signature dari robot verified)
     cmd = 'list'
     sig = bls.Sign(sk, cmd.encode())
     res = sr(io, {'cmd': cmd, 'robot_id': hex(rid), 'sig': sig.hex()})
@@ -102,20 +102,20 @@ def main():
         ids.append(int(r['robot_id'], 16))
         Pks.append(decompress_G1(G1Compressed(int(r['pk'], 16))))
 
-    #target kunci 1337 untuk 'unveil_secrets'
+    #target kunci 1337 ('unveil_secrets')
     secret_sk = 1337
     cmd = 'unveil_secrets'
     pk  = bls.SkToPk(secret_sk)
     sig = bls.Sign(secret_sk, cmd.encode())
     Pk  = pubkey_to_G1(pk)
 
-    #buat pk' sehingga sum_verified + pk' = Pk
+    #buat pk' ben sum_verified + pk' = Pk
     Pk_prime = add(Pk, neg(reduce(add, Pks, Z1)))
     pk_prime = G1_to_pubkey(Pk_prime)
     assert normalize(add(reduce(add, Pks), Pk_prime)) == normalize(Pk)
     io.success('Forged aggregate public key')
 
-    #join sebagai robot baru
+    #join sebagai robot (baru)
     res = sr(io, {'cmd': 'join', 'pk': pk_prime.hex()})
     new_id = int(res['robot_id'], 16)
     ids.append(new_id)
@@ -125,7 +125,7 @@ def main():
     Wn = crack_ec_lcg([i << 32 for i in ids])
     io.success('Cracked EC-LCG')
 
-    #verifikasi (ZKP) — 64 rounds (x,y dari setiap Wn += Gp)
+    #verifikasi (ZKP) — 64 round (x,y dari setiap Wn += Gp)
     sr(io, {'cmd': 'verify', 'robot_id': hex(new_id)})
 
     for _ in range(64 // 2):
@@ -133,21 +133,21 @@ def main():
         for c in Wn.xy():
             bit = (int(c) >> 32) & 1
             if bit == 1:
-                #cabang "minta x"
+                #cabang "jalok x"
                 x    = int(os.urandom(16).hex(), 16)
                 C_pk = multiply(Pk_prime, x)
                 C_g1 = multiply(G1, x)
                 recv_prompt_and_send_C(io, C_pk, C_g1)
                 io.sendlineafter(b'Give me x (hex): ', hex(x).encode())
             else:
-                #cabang "minta (sk + x)"
+                #cabang "jalok (sk + x)"
                 sk_x = int(os.urandom(16).hex(), 16)
                 C    = add(multiply(G1, sk_x), neg(Pk_prime))
-                #prompt C bisa pk/G1 — C sama2 valid untuk cabang ini
+                #prompt C iso pk/G1 — C sama2 valid (seng iki)
                 recv_prompt_and_send_C(io, C, C)
                 io.sendlineafter(b'Give me (sk + x) (hex): ', hex(sk_x).encode())
 
-    # 8)get-flag
+    #get-flag
     res = sr(io, {'cmd': cmd, 'sig': sig.hex()})
     sr(io, {'cmd': 'exit'})
     io.success(res.get('flag', 'no_flag'))
